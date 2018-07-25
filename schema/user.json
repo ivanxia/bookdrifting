@@ -1,0 +1,25 @@
+{
+    "$schema": "http://json-schema.org/draft-04/hyper-schema",
+    "id": "user",
+    "title": "user creation",
+    "type": "object",
+    "required": ["id", "name", "password"],
+    "additionalProperties": false,
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "name": {
+            "type": "string"
+        },
+        "password": {
+            "type": "string"
+        },
+        "role": {
+            "type": "integer"
+        },
+        "description": {
+            "type": "string"
+        }
+    }
+}

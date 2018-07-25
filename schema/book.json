@@ -1,0 +1,19 @@
+{
+    "$schema": "http://json-schema.org/draft-04/hyper-schema",
+    "id": "book",
+    "title": "book register",
+    "type": "object",
+    "required": ["name"],
+    "additionalProperties": false,
+    "properties": {
+        "name": {
+            "type": "string"
+        },
+        "status": {
+            "type": "integer"
+        },
+        "description": {
+            "type": "string"
+        }
+    }
+}
