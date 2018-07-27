@@ -39,6 +39,11 @@ DB_MAX_USAGE = 0
 # setsession : 一个可选的SQL命令列表用于准备每个会话，如["set datestyle to german", ...]
 DB_SET_SESSION = None
 
+
+BOOK_RELEASE = 0
+BOOK_RESERVED = 1
+BOOK_FROZEN = 2
+
 LOG = logger.get_logger()
 
 
@@ -57,30 +62,31 @@ class DBClient(object):
             cursorclass=pymysql.cursors.DictCursor)'''
 
         self.__pool = PooledDB(
-            creator     = pymysql,
-            mincached   = DB_MIN_CACHED,
-            maxcached   = DB_MAX_CACHED,
-            maxshared   = DB_MAX_SHARED,
-            maxconnections  = DB_MAX_CONNECYIONS,
-            blocking    = DB_BLOCKING,
-            maxusage    = DB_MAX_USAGE,
-            setsession  = DB_SET_SESSION,
-            host        = DB_HOST,
-            port        = DB_PORT,
-            user        = DB_USER,
-            passwd      = DB_PASSWORD,
-            db          = DB_DATEBASE,
-            use_unicode = False,
-            charset     = DB_CHARSET)
+            creator=pymysql,
+            mincached=DB_MIN_CACHED,
+            maxcached=DB_MAX_CACHED,
+            maxshared=DB_MAX_SHARED,
+            maxconnections=DB_MAX_CONNECYIONS,
+            blocking=DB_BLOCKING,
+            maxusage=DB_MAX_USAGE,
+            setsession=DB_SET_SESSION,
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            passwd=DB_PASSWORD,
+            db=DB_DATEBASE,
+            use_unicode=False,
+            charset=DB_CHARSET)
 
         self.connection = self.__pool.connection()
         self.cursor = self.connection.cursor()
 
     def run_commit(self, sql):
         self._init_con_()
-        self.cursor.execute(sql)
+        ar = self.cursor.execute(sql)
         self.connection.commit()
         self.connection.close()
+        return ar
 
     def run_show(self, sql, one=False):
         self._init_con_()
@@ -99,11 +105,8 @@ class DBClient(object):
         with self.cursor:
             for sql in sqls:
                 ret = self.cursor.execute(sql)
-                print "execute result: %s" % ret
-        time.sleep(10)
 
-        r = self.connection.commit()
-        print "commit result: %s" % r
+        self.connection.commit()
         self.connection.close()
 
 
@@ -117,6 +120,8 @@ class DBClient(object):
         CreateTime
         ModifyTime
 '''
+
+
 class UserDB(DBClient):
     def __init__(self):
         super(UserDB, self).__init__()
@@ -183,21 +188,43 @@ class UserDB(DBClient):
 '''
     Book record format:
         ID
-        UserId
+        OwnerId
         Name
         Status
         Description
+        KeeperId
         CreateTime
         ModifyTime
 '''
+
+
 class BookDB(DBClient):
     def __init__(self):
         super(BookDB, self).__init__()
 
-    def list_book(self, userId):
-        sql = "SELECT * FROM `book` WHERE `UserId`='%s' ORDER BY 'id' " % userId
+    def list_book(self, userId=0, status=None):
+        '''
+            if userId == 0:
+                return all books based on status
+            else:
+                return books as per userId and status
+        '''
 
-        LOG.info(("List books sql: [{0}]").format(sql))
+        if userId != 0:
+            if not status:
+                sql = "SELECT * FROM `book` WHERE `OwnerId`='%s' " % userId
+            else:
+                sql = "SELECT * FROM `book` WHERE `OwnerId`='%s' AND `Status`=%s" % (
+                    userId, status)
+
+            LOG.info(("List books as per userId sql: [{0}]").format(sql))
+        else:
+            if not status:
+                sql = "SELECT * FROM `book`"
+            else:
+                sql = "SELECT * FROM `book` WHERE `Status`=%s" % (status)
+
+            LOG.info(("List books sql: [{0}]").format(sql))
 
         books = []
         rows = self.run_show(sql)
@@ -205,19 +232,20 @@ class BookDB(DBClient):
         for row in rows:
             book = {
                 "ID": row[0],
-                "UserId": row[1],
+                "OwnerId": row[1],
                 "Name": row[2],
                 "Status": row[3],
                 "Description": row[4],
-                "CreateTime": str(row[5]),
-                "ModifyTime": str(row[6])
+                "keeperId": row[5],
+                "CreateTime": str(row[6]),
+                "ModifyTime": str(row[7])
             }
             books.append(book)
 
         return books
 
-    def get_book(self, userId, bookName):
-        sql = "SELECT * FROM `book` WHERE `UserId`='%s' AND `name`='%s'" % (
+    def get_book_by_name(self, userId, bookName):
+        sql = "SELECT * FROM `book` WHERE `OwnerId`='%s' AND `Name`='%s'" % (
             userId, bookName)
 
         LOG.info(("Get book sql: [{0}]").format(sql))
@@ -228,7 +256,26 @@ class BookDB(DBClient):
         if row:
             book = {
                 "ID": row[0][0],
-                "UserId": row[0][1],
+                "OwnerId": row[0][1],
+                "Name": row[0][2],
+                "Status": row[0][3],
+                "Description": row[0][4]
+            }
+        return book
+
+    def get_book_by_id(self, bookId):
+        sql = "SELECT * FROM `book` WHERE `OwnerId`='%s' AND `Name`='%s'" % (
+            userId, bookName)
+
+        LOG.info(("Get book sql: [{0}]").format(sql))
+
+        row = self.run_show(sql)
+
+        book = {}
+        if row:
+            book = {
+                "ID": row[0][0],
+                "OwnerId": row[0][1],
                 "Name": row[0][2],
                 "Status": row[0][3],
                 "Description": row[0][4]
@@ -236,44 +283,46 @@ class BookDB(DBClient):
         return book
 
     def count_book(self, userId):
-        sql = "SELECT COUNT(*) FROM `book` WHERE `UserId`=%s" % userId
+        sql = "SELECT COUNT(*) FROM `book` WHERE `OwnerId`=%s" % userId
 
         LOG.info(("Count books sql: [{0}]").format(sql))
 
         row = self.run_show(sql)
+        print row[0][0]
         return row[0][0]
 
     def add_book(self, userId, bookId, name, status=0, desc=None):
-        sql = "INSERT INTO `book` (`userId`, `id`, `name`, `status`, `description`, `CreateTime`, `ModifyTime`) "\
-            "VALUES ('%s', '%s', '%s', '%s', '%s', now(), now())" % (userId, bookId, name, status, desc)
+        sql = "INSERT INTO `book` (`OwnerId`, `ID`, `Name`, `Status`, `Description`, `KeeperId`, `CreateTime`, `ModifyTime`) "\
+            "VALUES ('%s', '%s', '%s', '%s', '%s', '%s', now(), now())" % (userId, bookId, name, status, desc, userId)
 
         LOG.info(("Add book sql: [{0}]").format(sql))
 
         self.run_commit(sql)
 
     def release_all_books(self):
-        sql = "UPDATE `book` SET `status`=0"
+        sql = "UPDATE `book` SET `Status`=0"
 
         LOG.info(("Release all books sql: [{0}]").format(sql))
 
         self.run_commit(sql)
 
     def update_book(self, userId, bookId, name, status=0, desc=None):
-        sql = "UPDATE `book` SET `id`='%s', `status`='%s', `description`='%s', `ModifyTime`=now() "\
-            "WHERE `userId`=%s and `name`='%s'" % (bookId, status, desc, userId, name)
+        sql = "UPDATE `book` SET `ID`='%s', `Status`='%s', `Description`='%s', `ModifyTime`=now() "\
+            "WHERE `OwnerId`=%s and `Name`='%s'" % (bookId, status, desc, userId, name)
 
         LOG.info(("Update book sql: [{0}]").format(sql))
 
         self.run_commit(sql)
 
     def delete_book(self, userId, bookName):
-        sql = "DELETE FROM `book` WHERE `userId`=%s and `name`='%s'" % (
+        sql = "DELETE FROM `book` WHERE `OwnerId`=%s and `Name`='%s'" % (
             userId, bookName)
 
         LOG.info(("Delete book sql: [{0}]").format(sql))
 
-        # self.run_commit(sql)
+        self.run_commit(sql)
 
+        '''
         sqls = []
         s = "update book set status =12 where id=260001"
         sqls.append(s)
@@ -282,21 +331,11 @@ class BookDB(DBClient):
 
         print sqls
         self.run_multi_commits(sqls)
-
-
-'''
-    Book_kept record format:
-        UserId
-        Book
-        CreateTime
-        ModifyTime
-'''
-class BookKeptDB(DBClient):
-    def __init__(self):
-        super(BookKeptDB, self).__init__()
+        '''
 
     def list_book_kept(self, userId):
-        sql = "SELECT * FROM `book_kept` WHERE `UserId`='%s' ORDER BY 'id' " % userId
+        sql = "SELECT * FROM `book` WHERE `KeeperId`=%s AND `Status`=%s " % (
+            userId, BOOK_FROZEN)
 
         LOG.info(("List books kept sql: [{0}]").format(sql))
 
@@ -304,38 +343,53 @@ class BookKeptDB(DBClient):
         kept_books = []
         for row in rows:
             kept_book = {
-                "UserId": row[0],
-                "Book": row[1]
+                "KeeperId": row[5],
+                "BookId": row[0],
+                "BookName": row[2]
             }
             kept_books.append(kept_book)
         return kept_books
 
+    def list_book_reserved(self, userId):
+        sql = "SELECT * FROM `book` WHERE `KeeperId`=%s AND `Status`=%s " % (
+            userId, BOOK_RESERVED)
 
-'''
-    Book_reserve record format:
-        UserId
-        Book
-        CreateTime
-        ModifyTime
-'''
-class BookReserveDB(DBClient):
-    def __init__(self):
-        super(BookReserveDB, self).__init__()
-
-    def list_book_reserve(self, userId):
-        sql = "SELECT * FROM `book_kept` WHERE `UserId`='%s' ORDER BY 'id' " % userId
-
-        LOG.info(("List books kept sql: [{0}]").format(sql))
+        LOG.info(("List books reserved sql: [{0}]").format(sql))
 
         rows = self.run_show(sql)
-
-        reserved_books = []
+        rsvd_books = []
         for row in rows:
-            reserved_book = {
-                "UserId": row[0],
-                "Book": row[1]
+            rsvd_book = {
+                "KeeperId": row[5],
+                "BookId": row[0],
+                "BookName": row[2]
             }
-            reserved_books.append(reserved_book)
-        return reserved_books
+            rsvd_books.append(rsvd_book)
+        return rsvd_books
 
-    # def
+    def book_reserve(self, userId, books):
+        resvFailedBooks = []
+        for book in books:
+            sql = "UPDATE `book` SET `Status`=%s, `KeeperId`=%s WHERE `ID`=%s AND `status`=%s" % (
+                BOOK_RESERVED, userId, book['id'], BOOK_RELEASE)
+            LOG.info(("Reserve book sql: [{0}]").format(sql))
+
+            affectedRow = self.run_commit(sql)
+            if affectedRow == 0:
+                resvFailedBooks.append(book['name'])
+
+        return resvFailedBooks
+
+    def book_unreserve(self, userId, books):
+        unresvFailedBooks = []
+        for book in books:
+            sql = "UPDATE `book` SET `Status`=%s, `KeeperId`=OwnerId WHERE `ID`=%s AND `KeeperId`=%s" % (
+                BOOK_RELEASE, book['id'], userId)
+
+            LOG.info(("Unreserve book sql: [{0}]").format(sql))
+
+            affectedRow = self.run_commit(sql)
+            if affectedRow == 0:
+                unresvFailedBooks.append(book['name'])
+
+        return unresvFailedBooks

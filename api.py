@@ -1,17 +1,30 @@
+# -*- coding: utf-8 -*-
+
 import falcon
 import os
 import json
 import httplib
-from db import UserDB, BookDB, BookKeptDB
+from db import UserDB, BookDB
 import schema
 import logger
 
 MAX_BOOKS_PER_UER = 4
-BOOK_RELEASE = 0
-BOOK_RESERVED = 1
-BOOK_FROZEN = 2
+
+BOOK_STATUS_MAP = {
+    "release": 0,
+    "frozen": 1,
+    "reserved": 2,
+    "all": None
+}
 
 LOG = logger.get_logger()
+
+
+def validate_params(param, params):
+    if param in params:
+        return True, 'OK'
+    else:
+        raise Exception('Valid params are %s'%params.keys())
 
 class User(object):
     def on_get(self, req, res):
@@ -66,24 +79,51 @@ class UserSpecified(object):
         res.status = httplib.OK
         res.body = "User ID %s delete successfully" % userId
 
+
+class Books(object):
+    def on_get(self, req, res):
+        status = None
+        if 'status' in req.params:
+            param = req.params['status']
+            validate_params(param, BOOK_STATUS_MAP)
+            status = BOOK_STATUS_MAP[param]
+
+        book = BookDB()
+        books = book.list_book(status=status)
+
+        LOG.info(("Books for all users fectched: {0}.").format(json.dumps(books).decode("unicode-escape")))
+
+        res.status = httplib.OK
+        res.body = json.dumps(books)
+
+
 class Book(object):
     def on_get(self, req, res, userId):
-        book = BookDB()
-        books = book.list_book(userId)
+        status = None
+        if 'status' in req.params:
+            param = req.params['status']
+            validate_params(param, BOOK_STATUS_MAP)
+            status = BOOK_STATUS_MAP[param]
 
-        print "----00-00-0-0-00-"
-        print type(books)
-        LOG.info(("Books fectched: {0}.").format(books))
-        #LOG.info(("Books fectched: {0}.").format(json.dumps(books).decode("unicode-escape")))
+        book = BookDB()
+        books = book.list_book(userId=userId, status=status)
+
+        LOG.info(("Books as per user fectched: {0}.").format(json.dumps(books).decode("unicode-escape")))
 
         res.status = httplib.OK
         res.body = json.dumps(books)
 
     def on_post(self, req, res, userId):
+        '''
+            - check if user exists;
+            - check if book exists;
+            - check if book number reach maximum;
+        '''
         data = req.stream.read()
         data = json.loads(data)
 
-        print "----------0000-------------"
+        sche = schema.Schema("book")
+        sche.validate(data)
 
         # Check if user exists
         user = UserDB()
@@ -93,38 +133,20 @@ class Book(object):
             res.body = "User Id %s not exists. Please create user first.\n" % userId
             return
 
-        print "----------0000-1-------------"
-
-        sche = schema.Schema("book")
-        sche.validate(data)
-
-        status = 0
-        if 'status' in data:
-            status = data['status']
-
-        desc = data['name']
-        if desc in data:
-            desc = data['description']
-
-        print "----------1-------------"
         book = BookDB()
-
         # check if book already exists
-        book_existing = book.get_book(userId, data['name'])
+        book_existing = book.get_book_by_name(userId, data['name'])
         if len(book_existing) != 0:
             res.status = httplib.INTERNAL_SERVER_ERROR
             res.body = "Book %s has already existed." % data['name']
             return
-        print "----------2-------------"
 
         # check if book amount reach maximum
         counts = book.count_book(userId)
-        #counts = counts[0]['COUNT(*)']
         if counts == MAX_BOOKS_PER_UER:
             res.status = httplib.INTERNAL_SERVER_ERROR
             res.body = "Only %s books can be added. It reaches maximum." % MAX_BOOKS_PER_UER
             return
-        print "----------3-------------"
 
         # Add book to DB
         if counts == 0:
@@ -139,7 +161,16 @@ class Book(object):
                 if bookId&i != 0:
                     bookId = i
                     break
-        print "----------4-------------"
+
+        LOG.info(("Book relative ID: [{0}]").format(bookId))
+
+        status = 0
+        if 'status' in data:
+            status = data['status']
+
+        desc = data['name']
+        if desc in data:
+            desc = data['description']
 
         bookId = 10000*int(userId)+bookId
         book.add_book(userId, bookId, data['name'], status, desc)
@@ -162,7 +193,7 @@ class BookSpecified(object):
         data = req.stream.read()
         data = json.loads(data)
 
-        myBook = book.get_book(userId, bookName)
+        myBook = book.get_book_by_name(userId, bookName)
 
         updatedBook = myBook[0]
         if 'id' in data:
@@ -177,16 +208,58 @@ class BookSpecified(object):
         res.status = httplib.OK
         res.body = "Book %s updated successfully" % bookName
 
-
+        '''
 class BookKept(object):
-    def on_get(self, userId):
-        bookKept = BookKeptDB()
-        keptBooks = bookKept.list_book_kept(userId)
+    def on_get(self, req, res, userId):
+        book = BookDB()
+        keptBooks = book.list_book_kept(userId)
 
         res.status = httplib.OK
         res.body = json.dumps(keptBooks)
+        '''
 
 
 class BookReserve(object):
-    def on_get(self, userId):
-        pass
+    def on_post(self, req, res, userId):
+        data = req.stream.read()
+        data = json.loads(data)
+
+        sche = schema.Schema("book_reserve")
+        sche.validate(data)
+
+        book = BookDB()
+
+        # check if exceeds the maximum books
+        resvd = book.list_book_reserved(userId)
+
+        print len(resvd)
+
+        if len(data['books'])+len(resvd) > MAX_BOOKS_PER_UER:
+            res.status = httplib.INTERNAL_SERVER_ERROR
+            res.body = "You can only reserve %s books now." % (MAX_BOOKS_PER_UER-len(resvd))
+            return
+
+        ret = book.book_reserve(userId, data['books'])
+        if not ret:
+            res.status = httplib.OK
+            res.body = "All books reserved."
+        else:
+            res.status = httplib.INTERNAL_SERVER_ERROR
+            res.body = "Books failed to reserve: %s" % ret
+
+    def on_put(self, req, res, userId):
+        data = req.stream.read()
+        data = json.loads(data)
+
+        sche = schema.Schema("book_reserve")
+        sche.validate(data)
+
+        book = BookDB()
+
+        ret = book.book_unreserve(userId, data['books'])
+        if not ret:
+            res.status = httplib.OK
+            res.body = "All books unreserved."
+        else:
+            res.status = httplib.INTERNAL_SERVER_ERROR
+            res.body = "Books failed to unreserve: %s" % ret

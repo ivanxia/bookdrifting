@@ -1,0 +1,25 @@
+{
+    "$schema": "http://json-schema.org/draft-04/hyper-schema",
+    "id": "book reserve",
+    "title": "book reserve",
+    "type": "object",
+    "required": ["books"],
+    "additionalProperties": false,
+    "properties": {
+        "books": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "name"],
+                "properties":{
+                    "id": {
+                        "type": "integer"
+                    },
+                    "name":{
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}
